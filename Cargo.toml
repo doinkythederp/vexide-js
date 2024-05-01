@@ -1,0 +1,20 @@
+[package]
+name = "vexide-template"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+num-traits = { version = "0.2", default-features = false }
+vexide-startup = { git = "https://github.com/vexide/vexide.git", branch = "main" }
+vexide-async = { git = "https://github.com/vexide/vexide.git", branch = "main" }
+vexide-devices = { git = "https://github.com/vexide/vexide.git", branch = "main" }
+vexide = { git = "https://github.com/vexide/vexide.git", branch = "main" }
+vex-sdk = "0.12.3"
+rquickjs = { git = "https://github.com/doinkythederp/rquickjs.git", version = "0.6.0", branch = "vexos-port", features = [
+    "loader",
+    "rust-alloc",
+    "classes",
+    "properties",
+] }
