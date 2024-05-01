@@ -6,13 +6,21 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, string::String};
-use core::{error::Error, fmt::Write, hint::spin_loop, time::Duration};
+use core::{
+    error::Error,
+    ffi::c_char,
+    fmt::Write,
+    hint::spin_loop,
+    ops::{Deref, DerefMut},
+    time::Duration,
+};
 
 use rquickjs::{
     loader::{BuiltinLoader, BuiltinResolver, FileResolver, ModuleLoader, ScriptLoader},
     module::ModuleDef,
-    Context, Ctx, Function, Module, Runtime,
+    Context, Ctx, FromJs, Function, Module, Runtime,
 };
+use vex_sdk::v5_image;
 use vexide::prelude::*;
 
 mod polyfill {
@@ -117,26 +125,104 @@ mod polyfill {
     }
 }
 
-struct VexSdk;
+#[repr(transparent)]
+struct Ptr<T>(*mut T);
 
-impl ModuleDef for VexSdk {
-    fn declare(decl: &rquickjs::module::Declarations) -> rquickjs::Result<()> {
-        decl.declare("vexDisplayRectFill")?;
-        Ok(())
+impl<'js, T> FromJs<'js> for Ptr<T> {
+    fn from_js(ctx: &Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {
+        let int = i32::from_js(ctx, value)?;
+        let ptr = usize::try_from(int)
+            .map_err(|_| rquickjs::Error::new_from_js("number", "memory address"))?;
+        Ok(Ptr(ptr as *mut T))
     }
+}
 
-    fn evaluate<'js>(
-        ctx: &Ctx<'js>,
-        exports: &rquickjs::module::Exports<'js>,
-    ) -> rquickjs::Result<()> {
-        exports.export(
-            "vexDisplayRectFill",
-            Function::new(ctx.clone(), |x1: i32, y1: i32, x2: i32, y2: i32| unsafe {
-                vex_sdk::vexDisplayRectFill(x1, y1, x2, y2);
-            }),
-        )?;
-        Ok(())
+impl<T> From<Ptr<T>> for *mut T {
+    fn from(ptr: Ptr<T>) -> Self {
+        ptr.0
     }
+}
+
+impl<T> From<Ptr<T>> for *const T {
+    fn from(ptr: Ptr<T>) -> Self {
+        ptr.0
+    }
+}
+
+macro_rules! create_sdk_module {
+    (
+        $(
+            fn $name:ident($($arg:ident: $arg_ty:ty $(,)?),*) $(-> $ret:ty)?
+        ),+ $(,)?
+    ) => {
+        struct VexSdk;
+
+        impl ModuleDef for VexSdk {
+            fn declare(decl: &rquickjs::module::Declarations) -> rquickjs::Result<()> {
+                $(
+                    decl.declare(stringify!($name))?;
+                )+
+                Ok(())
+            }
+
+            #[allow(non_snake_case)]
+            fn evaluate<'js>(
+                ctx: &Ctx<'js>,
+                exports: &rquickjs::module::Exports<'js>,
+            ) -> rquickjs::Result<()> {
+                $(
+                    exports.export(
+                        stringify!($name),
+                        Function::new(ctx.clone(), |$($arg: $arg_ty),*| unsafe {
+                            vex_sdk::$name($($arg.into(),)*)
+                        }),
+                    )?;
+                )+
+                Ok(())
+            }
+        }
+    };
+}
+
+create_sdk_module! {
+    fn vexDisplayForegroundColor(col: u32),
+    fn vexDisplayBackgroundColor(col: u32),
+    fn vexDisplayErase(),
+    fn vexDisplayScroll(nStartLine: i32, nLines: i32),
+    fn vexDisplayScrollRect(x1: i32, y1: i32, x2: i32, y2: i32, nLines: i32),
+    fn vexDisplayCopyRect(x1: i32, y1: i32, x2: i32, y2: i32, pSrc: Ptr<u32>, srcStride: i32),
+    fn vexDisplayPixelSet(x: u32, y: u32),
+    fn vexDisplayPixelClear(x: u32, y: u32),
+    fn vexDisplayLineDraw(x1: i32, y1: i32, x2: i32, y2: i32),
+    fn vexDisplayLineClear(x1: i32, y1: i32, x2: i32, y2: i32),
+    fn vexDisplayRectDraw(x1: i32, y1: i32, x2: i32, y2: i32),
+    fn vexDisplayRectClear(x1: i32, y1: i32, x2: i32, y2: i32),
+    fn vexDisplayRectFill(x1: i32, y1: i32, x2: i32, y2: i32),
+    fn vexDisplayCircleDraw(xc: i32, yc: i32, radius: i32),
+    fn vexDisplayCircleClear(xc: i32, yc: i32, radius: i32),
+    fn vexDisplayCircleFill(xc: i32, yc: i32, radius: i32),
+    fn vexDisplayTextSize(n: u32, d: u32),
+    fn vexDisplayFontNamedSet(pFontName: Ptr<c_char>),
+    fn vexDisplayForegroundColorGet() -> u32,
+    fn vexDisplayBackgroundColorGet() -> u32,
+    fn vexDisplayStringWidthGet(pString: Ptr<c_char>) -> i32,
+    fn vexDisplayStringHeightGet(pString: Ptr<c_char>) -> i32,
+    fn vexDisplayPenSizeSet(width: u32),
+    fn vexDisplayPenSizeGet() -> u32,
+    fn vexDisplayClipRegionSet(x1: i32, y1: i32, x2: i32, y2: i32),
+    fn vexDisplayRender(bVsyncWait: bool, bRunScheduler: bool),
+    fn vexDisplayDoubleBufferDisable(),
+    fn vexDisplayClipRegionSetWithIndex(index: i32, x1: i32, y1: i32, x2: i32, y2: i32),
+    fn vexImageBmpRead(ibuf: Ptr<u8>, oBuf: Ptr<v5_image>, maxw: u32, maxh: u32) -> u32,
+    fn vexImagePngRead(ibuf: Ptr<u8>, oBuf: Ptr<v5_image>, maxw: u32, maxh: u32, ibuflen: u32) -> u32,
+    // fn vexDisplayVPrintf(xpos: i32, ypos: i32, bOpaque: i32, format: *const c_char, args: VaList),
+    // fn vexDisplayVString(nLineNumber: i32, format: *const c_char, args: VaList),
+    // fn vexDisplayVStringAt(xpos: i32, ypos: i32, format: *const c_char, args: VaList),
+    // fn vexDisplayVBigString(nLineNumber: i32, format: *const c_char, args: VaList),
+    // fn vexDisplayVBigStringAt(xpos: i32, ypos: i32, format: *const c_char, args: VaList),
+    // fn vexDisplayVSmallStringAt(xpos: i32, ypos: i32, format: *const c_char, args: VaList),
+    // fn vexDisplayVCenteredString(nLineNumber: i32, format: *const c_char, args: VaList),
+    // fn vexDisplayVBigCenteredString(nLineNumber: i32, format: *const c_char, args: VaList),
 }
 
 // const SCRIPT_MODULE: &str = r#"
